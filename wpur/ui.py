@@ -33,6 +33,9 @@ HTML = """<!doctype html>
       --warn-text: #c2410c;
       --ok-bg: #ecfdf5;
       --ok-text: #047857;
+      --info-bg: #eff6ff;
+      --info-text: #1d4ed8;
+      --soft: #f8fafc;
     }
 
     * { box-sizing: border-box; }
@@ -153,7 +156,8 @@ HTML = """<!doctype html>
       margin-bottom: 7px;
     }
 
-    input {
+    input,
+    select {
       width: 100%;
       min-height: 42px;
       border: 1px solid var(--line);
@@ -164,7 +168,8 @@ HTML = """<!doctype html>
       font: inherit;
     }
 
-    input:focus {
+    input:focus,
+    select:focus {
       border-color: var(--accent);
       outline: 3px solid rgba(15, 118, 110, 0.16);
     }
@@ -201,6 +206,65 @@ HTML = """<!doctype html>
       color: var(--danger-text);
     }
 
+    .message.success {
+      display: block;
+      border-color: #bfdbfe;
+      background: var(--info-bg);
+      color: var(--info-text);
+    }
+
+    .scan-summary {
+      display: none;
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .scan-summary.visible {
+      display: block;
+    }
+
+    .result-tools {
+      display: none;
+      grid-template-columns: 1fr 220px;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .result-tools.visible {
+      display: grid;
+    }
+
+    .quality-strip {
+      display: none;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .quality-strip.visible {
+      display: grid;
+    }
+
+    .quality-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 10px 12px;
+    }
+
+    .quality-item strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .quality-item span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     .table-wrap {
       overflow: auto;
       border: 1px solid var(--line);
@@ -230,6 +294,7 @@ HTML = """<!doctype html>
     }
 
     tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: var(--soft); }
 
     .empty {
       padding: 32px 16px;
@@ -269,6 +334,8 @@ HTML = """<!doctype html>
       .status-count { margin-top: 14px; text-align: left; }
       .toolbar { grid-template-columns: 1fr; }
       .ftp-grid { grid-template-columns: 1fr; }
+      .result-tools { grid-template-columns: 1fr; }
+      .quality-strip { grid-template-columns: 1fr; }
       button { width: 100%; }
       h1 { font-size: 24px; }
     }
@@ -333,6 +400,23 @@ HTML = """<!doctype html>
     </form>
 
     <div id="message" class="message"></div>
+    <div id="scan-summary" class="scan-summary"></div>
+    <div id="result-tools" class="result-tools">
+      <div>
+        <label for="plugin-search">Rechercher un plugin</label>
+        <input id="plugin-search" placeholder="Nom, identifiant ou version" autocomplete="off">
+      </div>
+      <div>
+        <label for="status-filter">Statut</label>
+        <select id="status-filter">
+          <option value="">Tous les statuts</option>
+          <option value="ok">OK</option>
+          <option value="version_missing">Version manquante</option>
+          <option value="unreadable">Illisible</option>
+        </select>
+      </div>
+    </div>
+    <div id="quality-strip" class="quality-strip" aria-live="polite"></div>
 
     <div class="table-wrap">
       <table>
@@ -360,8 +444,14 @@ HTML = """<!doctype html>
     const ftpButton = document.querySelector("#ftp-scan-button");
     const body = document.querySelector("#plugins-body");
     const message = document.querySelector("#message");
+    const summary = document.querySelector("#scan-summary");
     const count = document.querySelector("#plugin-count");
+    const resultTools = document.querySelector("#result-tools");
+    const qualityStrip = document.querySelector("#quality-strip");
+    const searchInput = document.querySelector("#plugin-search");
+    const statusFilter = document.querySelector("#status-filter");
     const sourceInputs = [...document.querySelectorAll("input[name='source']")];
+    let currentPlugins = [];
 
     const labels = {
       ok: "OK",
@@ -374,6 +464,11 @@ HTML = """<!doctype html>
       message.className = "message error";
     }
 
+    function showSuccess(text) {
+      message.textContent = text;
+      message.className = "message success";
+    }
+
     function clearError() {
       message.textContent = "";
       message.className = "message";
@@ -382,6 +477,45 @@ HTML = """<!doctype html>
     function renderEmpty(text) {
       body.innerHTML = `<tr><td class="empty" colspan="5">${text}</td></tr>`;
       count.textContent = "0";
+      currentPlugins = [];
+      resultTools.className = "result-tools";
+      qualityStrip.className = "quality-strip";
+    }
+
+    function clearSummary() {
+      summary.textContent = "";
+      summary.className = "scan-summary";
+    }
+
+    function resetFilters() {
+      searchInput.value = "";
+      statusFilter.value = "";
+    }
+
+    function renderSummary(payload) {
+      const now = new Date().toLocaleString("fr-FR", {
+        dateStyle: "short",
+        timeStyle: "short"
+      });
+      const target = payload.source === "ftp"
+        ? `FTP ${payload.host} - chemin ${payload.basePath || "/"}`
+        : `Local - ${payload.path}`;
+
+      summary.textContent = `Derniere analyse : ${target} - ${now}`;
+      summary.className = "scan-summary visible";
+    }
+
+    function renderQuality(plugins) {
+      const ok = plugins.filter((plugin) => plugin.status === "ok").length;
+      const missing = plugins.filter((plugin) => plugin.status === "version_missing").length;
+      const unreadable = plugins.filter((plugin) => plugin.status === "unreadable").length;
+
+      qualityStrip.innerHTML = `
+        <div class="quality-item"><strong>${ok}</strong><span>lisibles avec version</span></div>
+        <div class="quality-item"><strong>${missing}</strong><span>versions manquantes</span></div>
+        <div class="quality-item"><strong>${unreadable}</strong><span>plugins illisibles</span></div>
+      `;
+      qualityStrip.className = "quality-strip visible";
     }
 
     function escapeHtml(value) {
@@ -395,11 +529,9 @@ HTML = """<!doctype html>
       }[char]));
     }
 
-    function renderPlugins(plugins) {
-      count.textContent = plugins.length;
-
+    function renderPluginRows(plugins) {
       if (!plugins.length) {
-        renderEmpty("Aucun plugin detecte pour cette source.");
+        body.innerHTML = `<tr><td class="empty" colspan="5">Aucun plugin ne correspond aux filtres.</td></tr>`;
         return;
       }
 
@@ -415,6 +547,41 @@ HTML = """<!doctype html>
           </tr>
         `;
       }).join("");
+    }
+
+    function applyFilters() {
+      const term = searchInput.value.trim().toLowerCase();
+      const status = statusFilter.value;
+      const filtered = currentPlugins.filter((plugin) => {
+        const searchable = [
+          plugin.name,
+          plugin.slug,
+          plugin.version,
+          plugin.main_file,
+          labels[plugin.status] || plugin.status
+        ].join(" ").toLowerCase();
+        return (!term || searchable.includes(term)) && (!status || plugin.status === status);
+      });
+
+      renderPluginRows(filtered);
+    }
+
+    function renderPlugins(plugins) {
+      currentPlugins = [...plugins].sort((left, right) => {
+        const leftName = left.name || left.slug;
+        const rightName = right.name || right.slug;
+        return leftName.localeCompare(rightName, "fr", { sensitivity: "base" });
+      });
+      count.textContent = currentPlugins.length;
+
+      if (!currentPlugins.length) {
+        renderEmpty("Aucun plugin detecte pour cette source.");
+        return;
+      }
+
+      resultTools.className = "result-tools visible";
+      renderQuality(currentPlugins);
+      applyFilters();
     }
 
     function selectedSource() {
@@ -434,9 +601,14 @@ HTML = """<!doctype html>
       localFields.classList.toggle("hidden", source !== "local");
       ftpFields.classList.toggle("hidden", source !== "ftp");
       clearError();
+      clearSummary();
+      resetFilters();
+      renderEmpty("Renseigne une source pour commencer.");
     }
 
     sourceInputs.forEach((input) => input.addEventListener("change", updateSourceFields));
+    searchInput.addEventListener("input", applyFilters);
+    statusFilter.addEventListener("change", applyFilters);
 
     function buildPayload() {
       const source = selectedSource();
@@ -457,9 +629,40 @@ HTML = """<!doctype html>
       };
     }
 
+    function validatePayload(payload) {
+      if (payload.source === "ftp") {
+        const missing = [];
+        if (!payload.host) missing.push("hote FTP");
+        if (!payload.user) missing.push("utilisateur");
+        if (!payload.password) missing.push("mot de passe");
+        if (missing.length) {
+          return `Champs manquants : ${missing.join(", ")}`;
+        }
+        if (!/^[0-9]+$/.test(payload.port || "21")) {
+          return "Le port FTP doit etre un nombre.";
+        }
+        return "";
+      }
+
+      if (!payload.path) {
+        return "Renseigne un chemin local.";
+      }
+      return "";
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       clearError();
+      clearSummary();
+
+      const requestPayload = buildPayload();
+      const validationError = validatePayload(requestPayload);
+      if (validationError) {
+        renderEmpty("Aucun resultat a afficher.");
+        showError(validationError);
+        return;
+      }
+
       setLoading(true);
 
       try {
@@ -467,15 +670,17 @@ HTML = """<!doctype html>
         const response = await fetch("/api/plugins", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildPayload())
+          body: JSON.stringify(requestPayload)
         });
-        const payload = await response.json();
+        const result = await response.json();
 
         if (!response.ok) {
-          throw new Error(payload.error || "Analyse impossible.");
+          throw new Error(result.error || "Analyse impossible.");
         }
 
-        renderPlugins(payload.plugins);
+        renderPlugins(result.plugins);
+        renderSummary(requestPayload);
+        showSuccess(`${result.plugins.length} plugin(s) detecte(s).`);
       } catch (error) {
         renderEmpty("Aucun resultat a afficher.");
         showError(error.message);
@@ -537,6 +742,9 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
 
         if source == "ftp":
             self._handle_ftp_plugins(payload)
+            return
+        if source != "local":
+            self._send_json({"error": "Source inconnue."}, status=400)
             return
 
         self._handle_local_plugins(payload)

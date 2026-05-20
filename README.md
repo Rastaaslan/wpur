@@ -75,3 +75,5 @@ python -m wpur.plugins_ftp
 ## Documentation projet
 
 Le backlog Scrum est disponible dans [docs/backlog.md](docs/backlog.md).
+
+La preparation du livrable 1 est detaillee dans [docs/livrable-1.md](docs/livrable-1.md).

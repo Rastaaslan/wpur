@@ -25,6 +25,8 @@ En tant qu'utilisateur, je veux fournir un acces FTP a un site WordPress afin d'
 
 **Objectif :** afficher dans une interface simple la liste des plugins d'un site WordPress et leur version actuelle.
 
+Preparation detaillee : voir [livrable-1.md](livrable-1.md).
+
 ### User story
 
 En tant qu'utilisateur, je souhaite avoir une interface simple sur laquelle est visible la liste des plugins d'un site internet WordPress et leur version actuelle.
@@ -53,6 +55,8 @@ En tant qu'utilisateur, je souhaite pouvoir voir la version actuellement install
 ## Troisieme livrable
 
 **Objectif :** alimenter dynamiquement une page Figma a partir d'un template.
+
+Notes de cadrage : voir [figma-template-notes.md](figma-template-notes.md).
 
 ### User story
 
