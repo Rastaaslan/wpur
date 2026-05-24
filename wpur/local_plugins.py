@@ -13,6 +13,9 @@ class LocalPluginInfo:
     version: str | None
     main_file: str | None
     status: str
+    latest_version: str | None = None
+    update_status: str = "not_checked"
+    update_source: str | None = None
 
 
 def resolve_plugins_path(input_path: str) -> Path:

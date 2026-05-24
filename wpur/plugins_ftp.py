@@ -28,6 +28,9 @@ class PluginInfo:
     version: str | None
     main_file: str | None
     status: str
+    latest_version: str | None = None
+    update_status: str = "not_checked"
+    update_source: str | None = None
 
 
 def normalize_ftp_path(*parts: str) -> str:

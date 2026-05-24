@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 from wpur.local_plugins import list_local_plugins
 from wpur.plugins_ftp import WordPressFtpPluginReader, connect
+from wpur.update_checker import enrich_plugins_with_updates
 
 
 # UI temporaire en un seul fichier pour le premier sprint : suffisant pour tester
@@ -226,7 +227,7 @@ HTML = """<!doctype html>
 
     .result-tools {
       display: none;
-      grid-template-columns: 1fr 220px;
+      grid-template-columns: 1fr 220px 220px;
       gap: 10px;
       margin-bottom: 16px;
     }
@@ -328,6 +329,23 @@ HTML = """<!doctype html>
       color: var(--danger-text);
     }
 
+    .badge.update_available {
+      background: var(--warn-bg);
+      color: var(--warn-text);
+    }
+
+    .badge.up_to_date {
+      background: var(--ok-bg);
+      color: var(--ok-text);
+    }
+
+    .badge.latest_unknown,
+    .badge.installed_unknown,
+    .badge.not_checked {
+      background: #f1f5f9;
+      color: var(--muted);
+    }
+
     @media (max-width: 720px) {
       main { width: min(100% - 20px, 1120px); padding-top: 18px; }
       header { display: block; }
@@ -407,12 +425,22 @@ HTML = """<!doctype html>
         <input id="plugin-search" placeholder="Nom, identifiant ou version" autocomplete="off">
       </div>
       <div>
-        <label for="status-filter">Statut</label>
+        <label for="status-filter">Statut de lecture</label>
         <select id="status-filter">
           <option value="">Tous les statuts</option>
           <option value="ok">OK</option>
           <option value="version_missing">Version manquante</option>
           <option value="unreadable">Illisible</option>
+        </select>
+      </div>
+      <div>
+        <label for="update-filter">Mise a jour</label>
+        <select id="update-filter">
+          <option value="">Toutes</option>
+          <option value="update_available">A installer</option>
+          <option value="up_to_date">A jour</option>
+          <option value="latest_unknown">Inconnue</option>
+          <option value="installed_unknown">Version actuelle inconnue</option>
         </select>
       </div>
     </div>
@@ -425,12 +453,14 @@ HTML = """<!doctype html>
             <th>Plugin</th>
             <th>Identifiant</th>
             <th>Version actuelle</th>
+            <th>Version disponible</th>
+            <th>Mise a jour</th>
             <th>Fichier principal</th>
             <th>Statut</th>
           </tr>
         </thead>
         <tbody id="plugins-body">
-          <tr><td class="empty" colspan="5">Renseigne une source pour commencer.</td></tr>
+          <tr><td class="empty" colspan="7">Renseigne une source pour commencer.</td></tr>
         </tbody>
       </table>
     </div>
@@ -450,6 +480,7 @@ HTML = """<!doctype html>
     const qualityStrip = document.querySelector("#quality-strip");
     const searchInput = document.querySelector("#plugin-search");
     const statusFilter = document.querySelector("#status-filter");
+    const updateFilter = document.querySelector("#update-filter");
     const sourceInputs = [...document.querySelectorAll("input[name='source']")];
     let currentPlugins = [];
 
@@ -457,6 +488,14 @@ HTML = """<!doctype html>
       ok: "OK",
       version_missing: "Version manquante",
       unreadable: "Illisible"
+    };
+
+    const updateLabels = {
+      up_to_date: "A jour",
+      update_available: "A installer",
+      latest_unknown: "Inconnue",
+      installed_unknown: "Version actuelle inconnue",
+      not_checked: "Non verifie"
     };
 
     function showError(text) {
@@ -475,7 +514,7 @@ HTML = """<!doctype html>
     }
 
     function renderEmpty(text) {
-      body.innerHTML = `<tr><td class="empty" colspan="5">${text}</td></tr>`;
+      body.innerHTML = `<tr><td class="empty" colspan="7">${text}</td></tr>`;
       count.textContent = "0";
       currentPlugins = [];
       resultTools.className = "result-tools";
@@ -490,6 +529,7 @@ HTML = """<!doctype html>
     function resetFilters() {
       searchInput.value = "";
       statusFilter.value = "";
+      updateFilter.value = "";
     }
 
     function renderSummary(payload) {
@@ -507,13 +547,13 @@ HTML = """<!doctype html>
 
     function renderQuality(plugins) {
       const ok = plugins.filter((plugin) => plugin.status === "ok").length;
-      const missing = plugins.filter((plugin) => plugin.status === "version_missing").length;
-      const unreadable = plugins.filter((plugin) => plugin.status === "unreadable").length;
+      const updates = plugins.filter((plugin) => plugin.update_status === "update_available").length;
+      const unknown = plugins.filter((plugin) => ["latest_unknown", "installed_unknown"].includes(plugin.update_status)).length;
 
       qualityStrip.innerHTML = `
         <div class="quality-item"><strong>${ok}</strong><span>lisibles avec version</span></div>
-        <div class="quality-item"><strong>${missing}</strong><span>versions manquantes</span></div>
-        <div class="quality-item"><strong>${unreadable}</strong><span>plugins illisibles</span></div>
+        <div class="quality-item"><strong>${updates}</strong><span>mises a jour detectees</span></div>
+        <div class="quality-item"><strong>${unknown}</strong><span>versions disponibles inconnues</span></div>
       `;
       qualityStrip.className = "quality-strip visible";
     }
@@ -531,17 +571,20 @@ HTML = """<!doctype html>
 
     function renderPluginRows(plugins) {
       if (!plugins.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="5">Aucun plugin ne correspond aux filtres.</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="7">Aucun plugin ne correspond aux filtres.</td></tr>`;
         return;
       }
 
       body.innerHTML = plugins.map((plugin) => {
         const status = plugin.status || "unreadable";
+        const updateStatus = plugin.update_status || "not_checked";
         return `
           <tr>
             <td><strong>${escapeHtml(plugin.name || plugin.slug)}</strong></td>
             <td>${escapeHtml(plugin.slug)}</td>
             <td>${escapeHtml(plugin.version)}</td>
+            <td>${escapeHtml(plugin.latest_version)}</td>
+            <td><span class="badge ${escapeHtml(updateStatus)}">${escapeHtml(updateLabels[updateStatus] || updateStatus)}</span></td>
             <td>${escapeHtml(plugin.main_file)}</td>
             <td><span class="badge ${escapeHtml(status)}">${escapeHtml(labels[status] || status)}</span></td>
           </tr>
@@ -552,15 +595,22 @@ HTML = """<!doctype html>
     function applyFilters() {
       const term = searchInput.value.trim().toLowerCase();
       const status = statusFilter.value;
+      const updateStatus = updateFilter.value;
       const filtered = currentPlugins.filter((plugin) => {
         const searchable = [
           plugin.name,
           plugin.slug,
           plugin.version,
+          plugin.latest_version,
           plugin.main_file,
-          labels[plugin.status] || plugin.status
+          labels[plugin.status] || plugin.status,
+          updateLabels[plugin.update_status] || plugin.update_status
         ].join(" ").toLowerCase();
-        return (!term || searchable.includes(term)) && (!status || plugin.status === status);
+        return (
+          (!term || searchable.includes(term))
+          && (!status || plugin.status === status)
+          && (!updateStatus || plugin.update_status === updateStatus)
+        );
       });
 
       renderPluginRows(filtered);
@@ -609,6 +659,7 @@ HTML = """<!doctype html>
     sourceInputs.forEach((input) => input.addEventListener("change", updateSourceFields));
     searchInput.addEventListener("input", applyFilters);
     statusFilter.addEventListener("change", applyFilters);
+    updateFilter.addEventListener("change", applyFilters);
 
     function buildPayload() {
       const source = selectedSource();
@@ -728,7 +779,7 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            plugins = list_local_plugins(input_path)
+            plugins = self._with_update_versions(list_local_plugins(input_path))
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=400)
             return
@@ -756,7 +807,7 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            plugins = list_local_plugins(input_path)
+            plugins = self._with_update_versions(list_local_plugins(input_path))
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=400)
             return
@@ -789,7 +840,7 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
         ftp = None
         try:
             ftp = connect(host, user, password, port, timeout=30)
-            plugins = WordPressFtpPluginReader(ftp, base_path).list_plugins()
+            plugins = self._with_update_versions(WordPressFtpPluginReader(ftp, base_path).list_plugins())
         except Exception as exc:
             self._send_json({"error": f"Connexion ou lecture FTP impossible : {exc}"}, status=400)
             return
@@ -803,6 +854,11 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
                     ftp.close()
 
         self._send_json({"plugins": [asdict(plugin) for plugin in plugins]})
+
+    def _with_update_versions(self, plugins):
+        # La verification WordPress.org est un enrichissement : si une version publique
+        # est introuvable, le plugin reste affiche avec un statut "Inconnue".
+        return enrich_plugins_with_updates(plugins)
 
     def _read_json_body(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0") or "0")
