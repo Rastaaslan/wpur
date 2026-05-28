@@ -2,11 +2,23 @@
 
 Outil de preparation de rapports de maintenance WordPress.
 
-Le projet commence par le **livrable zero** : lister les plugins installes sur un site WordPress via un acces FTP.
+WPUR sait aujourd'hui lister les plugins installes, lire leur version actuelle,
+puis enrichir ces resultats avec la derniere version publique connue sur
+WordPress.org quand le plugin est disponible dans le repertoire public.
 
-## Livrable zero
+## Installation dev
 
-## Interface locale temporaire
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+Puis lancer les tests :
+
+```powershell
+python -m pytest
+```
+
+## Interface locale
 
 Pour tester avec un chemin sur ta machine :
 
@@ -30,7 +42,11 @@ L'interface permet aussi de tester un acces FTP avec :
 - port
 - chemin WordPress sur le FTP
 
-### Utilisation
+La case **Versions disponibles WordPress.org** active l'enrichissement du
+livrable 2 : version disponible, statut de mise a jour, plugin public,
+premium/prive, inconnu ou en erreur.
+
+## CLI FTP
 
 ```powershell
 python -m wpur.plugins_ftp --host ftp.exemple.com --user mon_user --password mon_mot_de_passe
@@ -53,6 +69,46 @@ Sortie CSV :
 ```powershell
 python -m wpur.plugins_ftp --host ftp.exemple.com --user mon_user --password mon_mot_de_passe --format csv
 ```
+
+Avec les dernieres versions publiques :
+
+```powershell
+python -m wpur.plugins_ftp --host ftp.exemple.com --user mon_user --password mon_mot_de_passe --with-latest
+```
+
+Sortie JSON enrichie :
+
+```powershell
+python -m wpur.plugins_ftp --host ftp.exemple.com --user mon_user --password mon_mot_de_passe --with-latest --format json
+```
+
+Options utiles :
+
+- `--refresh-latest` ignore le cache local ;
+- `--version-cache` choisit le fichier de cache JSON ;
+- `--version-timeout` regle le delai API WordPress.org ;
+- `--version-workers` regle le nombre de recherches en parallele.
+
+## CLI versions publiques
+
+Pour tester directement la version publique d'un plugin :
+
+```powershell
+python -m wpur.versions akismet contact-form-7 --json
+```
+
+Statuts de mise a jour :
+
+- `up_to_date` : version installee egale a la version publique ;
+- `update_available` : une version publique plus recente existe ;
+- `premium_custom` : plugin absent du repertoire public WordPress.org ;
+- `unknown` : information insuffisante ;
+- `error` : erreur de recuperation ;
+- `newer_than_public` : la version installee semble plus recente que la version publique.
+
+Les resultats WordPress.org sont mis en cache par defaut dans
+`.wpur-cache/plugin_versions.json`. Le chemin peut aussi etre force avec la
+variable `WPUR_VERSION_CACHE`.
 
 ### Variables d'environnement
 
@@ -77,3 +133,5 @@ python -m wpur.plugins_ftp
 Le backlog Scrum est disponible dans [docs/backlog.md](docs/backlog.md).
 
 La preparation du livrable 1 est detaillee dans [docs/livrable-1.md](docs/livrable-1.md).
+
+Le livrable 2 est detaille dans [docs/livrable-2.md](docs/livrable-2.md).

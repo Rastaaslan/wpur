@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 from wpur.local_plugins import list_local_plugins
 from wpur.plugins_ftp import WordPressFtpPluginReader, connect
+from wpur.versions import WordPressPluginVersionClient, enrich_plugins_with_latest
 
 
 # UI temporaire en un seul fichier pour le premier sprint : suffisant pour tester
@@ -132,6 +133,21 @@ HTML = """<!doctype html>
       color: white;
     }
 
+    .inline-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 16px;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .inline-option input {
+      width: 18px;
+      min-height: 18px;
+      accent-color: var(--accent);
+    }
+
     .toolbar {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -226,7 +242,7 @@ HTML = """<!doctype html>
 
     .result-tools {
       display: none;
-      grid-template-columns: 1fr 220px;
+      grid-template-columns: 1fr 210px 220px;
       gap: 10px;
       margin-bottom: 16px;
     }
@@ -237,7 +253,7 @@ HTML = """<!doctype html>
 
     .quality-strip {
       display: none;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
       margin-bottom: 16px;
     }
@@ -274,7 +290,7 @@ HTML = """<!doctype html>
 
     table {
       width: 100%;
-      min-width: 760px;
+      min-width: 940px;
       border-collapse: collapse;
     }
 
@@ -328,6 +344,24 @@ HTML = """<!doctype html>
       color: var(--danger-text);
     }
 
+    .badge.up_to_date {
+      background: var(--ok-bg);
+      color: var(--ok-text);
+    }
+
+    .badge.update_available,
+    .badge.premium_custom,
+    .badge.unknown,
+    .badge.newer_than_public {
+      background: var(--warn-bg);
+      color: var(--warn-text);
+    }
+
+    .badge.error {
+      background: var(--danger-bg);
+      color: var(--danger-text);
+    }
+
     @media (max-width: 720px) {
       main { width: min(100% - 20px, 1120px); padding-top: 18px; }
       header { display: block; }
@@ -365,6 +399,11 @@ HTML = """<!doctype html>
           <span>FTP</span>
         </label>
       </div>
+
+      <label class="inline-option" for="include-latest">
+        <input id="include-latest" name="includeLatest" type="checkbox" checked>
+        <span>Versions disponibles WordPress.org</span>
+      </label>
 
       <div class="toolbar" id="local-fields">
         <div>
@@ -415,6 +454,17 @@ HTML = """<!doctype html>
           <option value="unreadable">Illisible</option>
         </select>
       </div>
+      <div>
+        <label for="update-filter">Mise a jour</label>
+        <select id="update-filter">
+          <option value="">Tous les statuts</option>
+          <option value="up_to_date">A jour</option>
+          <option value="update_available">Mise a jour disponible</option>
+          <option value="premium_custom">Premium ou prive</option>
+          <option value="unknown">Inconnu</option>
+          <option value="error">Erreur</option>
+        </select>
+      </div>
     </div>
     <div id="quality-strip" class="quality-strip" aria-live="polite"></div>
 
@@ -425,12 +475,14 @@ HTML = """<!doctype html>
             <th>Plugin</th>
             <th>Identifiant</th>
             <th>Version actuelle</th>
+            <th>Version disponible</th>
+            <th>Mise a jour</th>
             <th>Fichier principal</th>
             <th>Statut</th>
           </tr>
         </thead>
         <tbody id="plugins-body">
-          <tr><td class="empty" colspan="5">Renseigne une source pour commencer.</td></tr>
+          <tr><td class="empty" colspan="7">Renseigne une source pour commencer.</td></tr>
         </tbody>
       </table>
     </div>
@@ -450,6 +502,8 @@ HTML = """<!doctype html>
     const qualityStrip = document.querySelector("#quality-strip");
     const searchInput = document.querySelector("#plugin-search");
     const statusFilter = document.querySelector("#status-filter");
+    const updateFilter = document.querySelector("#update-filter");
+    const includeLatest = document.querySelector("#include-latest");
     const sourceInputs = [...document.querySelectorAll("input[name='source']")];
     let currentPlugins = [];
 
@@ -457,6 +511,15 @@ HTML = """<!doctype html>
       ok: "OK",
       version_missing: "Version manquante",
       unreadable: "Illisible"
+    };
+
+    const updateLabels = {
+      up_to_date: "A jour",
+      update_available: "Mise a jour disponible",
+      premium_custom: "Premium ou prive",
+      unknown: "Inconnu",
+      error: "Erreur",
+      newer_than_public: "Version installee plus recente"
     };
 
     function showError(text) {
@@ -475,7 +538,7 @@ HTML = """<!doctype html>
     }
 
     function renderEmpty(text) {
-      body.innerHTML = `<tr><td class="empty" colspan="5">${text}</td></tr>`;
+      body.innerHTML = `<tr><td class="empty" colspan="7">${text}</td></tr>`;
       count.textContent = "0";
       currentPlugins = [];
       resultTools.className = "result-tools";
@@ -490,6 +553,7 @@ HTML = """<!doctype html>
     function resetFilters() {
       searchInput.value = "";
       statusFilter.value = "";
+      updateFilter.value = "";
     }
 
     function renderSummary(payload) {
@@ -506,14 +570,16 @@ HTML = """<!doctype html>
     }
 
     function renderQuality(plugins) {
-      const ok = plugins.filter((plugin) => plugin.status === "ok").length;
-      const missing = plugins.filter((plugin) => plugin.status === "version_missing").length;
-      const unreadable = plugins.filter((plugin) => plugin.status === "unreadable").length;
+      const upToDate = plugins.filter((plugin) => plugin.update_status === "up_to_date").length;
+      const updates = plugins.filter((plugin) => plugin.update_status === "update_available").length;
+      const unknown = plugins.filter((plugin) => ["unknown", "premium_custom", "newer_than_public"].includes(plugin.update_status)).length;
+      const unreadable = plugins.filter((plugin) => (plugin.read_status || plugin.status) === "unreadable" || plugin.update_status === "error").length;
 
       qualityStrip.innerHTML = `
-        <div class="quality-item"><strong>${ok}</strong><span>lisibles avec version</span></div>
-        <div class="quality-item"><strong>${missing}</strong><span>versions manquantes</span></div>
-        <div class="quality-item"><strong>${unreadable}</strong><span>plugins illisibles</span></div>
+        <div class="quality-item"><strong>${upToDate}</strong><span>plugins a jour</span></div>
+        <div class="quality-item"><strong>${updates}</strong><span>mises a jour disponibles</span></div>
+        <div class="quality-item"><strong>${unknown}</strong><span>inconnus ou premium</span></div>
+        <div class="quality-item"><strong>${unreadable}</strong><span>erreurs ou illisibles</span></div>
       `;
       qualityStrip.className = "quality-strip visible";
     }
@@ -531,17 +597,21 @@ HTML = """<!doctype html>
 
     function renderPluginRows(plugins) {
       if (!plugins.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="5">Aucun plugin ne correspond aux filtres.</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="7">Aucun plugin ne correspond aux filtres.</td></tr>`;
         return;
       }
 
       body.innerHTML = plugins.map((plugin) => {
-        const status = plugin.status || "unreadable";
+        const status = plugin.read_status || plugin.status || "unreadable";
+        const updateStatus = plugin.update_status || "unknown";
+        const installedVersion = plugin.installed_version || plugin.version;
         return `
           <tr>
             <td><strong>${escapeHtml(plugin.name || plugin.slug)}</strong></td>
             <td>${escapeHtml(plugin.slug)}</td>
-            <td>${escapeHtml(plugin.version)}</td>
+            <td>${escapeHtml(installedVersion)}</td>
+            <td>${escapeHtml(plugin.latest_version)}</td>
+            <td><span class="badge ${escapeHtml(updateStatus)}">${escapeHtml(updateLabels[updateStatus] || updateStatus)}</span></td>
             <td>${escapeHtml(plugin.main_file)}</td>
             <td><span class="badge ${escapeHtml(status)}">${escapeHtml(labels[status] || status)}</span></td>
           </tr>
@@ -552,15 +622,24 @@ HTML = """<!doctype html>
     function applyFilters() {
       const term = searchInput.value.trim().toLowerCase();
       const status = statusFilter.value;
+      const updateStatus = updateFilter.value;
       const filtered = currentPlugins.filter((plugin) => {
+        const readStatus = plugin.read_status || plugin.status;
         const searchable = [
           plugin.name,
           plugin.slug,
           plugin.version,
+          plugin.installed_version,
+          plugin.latest_version,
+          plugin.update_status,
+          plugin.remote_status,
           plugin.main_file,
-          labels[plugin.status] || plugin.status
+          labels[readStatus] || readStatus,
+          updateLabels[plugin.update_status] || plugin.update_status
         ].join(" ").toLowerCase();
-        return (!term || searchable.includes(term)) && (!status || plugin.status === status);
+        return (!term || searchable.includes(term))
+          && (!status || readStatus === status)
+          && (!updateStatus || plugin.update_status === updateStatus);
       });
 
       renderPluginRows(filtered);
@@ -609,6 +688,7 @@ HTML = """<!doctype html>
     sourceInputs.forEach((input) => input.addEventListener("change", updateSourceFields));
     searchInput.addEventListener("input", applyFilters);
     statusFilter.addEventListener("change", applyFilters);
+    updateFilter.addEventListener("change", applyFilters);
 
     function buildPayload() {
       const source = selectedSource();
@@ -619,13 +699,15 @@ HTML = """<!doctype html>
           user: document.querySelector("#ftp-user").value.trim(),
           password: document.querySelector("#ftp-password").value,
           port: document.querySelector("#ftp-port").value.trim(),
-          basePath: document.querySelector("#ftp-base-path").value.trim() || "/"
+          basePath: document.querySelector("#ftp-base-path").value.trim() || "/",
+          includeLatest: includeLatest.checked
         };
       }
 
       return {
         source,
-        path: document.querySelector("#site-path").value.trim()
+        path: document.querySelector("#site-path").value.trim(),
+        includeLatest: includeLatest.checked
       };
     }
 
@@ -720,6 +802,14 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
 
+    def _serialize_plugins(self, plugins: list[object], payload: dict[str, object] | None = None) -> list[dict[str, object]]:
+        include_latest = bool(payload and payload.get("includeLatest"))
+        if not include_latest:
+            return [asdict(plugin) for plugin in plugins]
+
+        client = WordPressPluginVersionClient()
+        return enrich_plugins_with_latest(plugins, lookup=client)
+
     def _handle_plugins(self, query: dict[str, list[str]]) -> None:
         # Garde pour les anciens tests locaux qui appellent encore /api/plugins?path=...
         input_path = query.get("path", [""])[0].strip()
@@ -733,7 +823,7 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, status=400)
             return
 
-        self._send_json({"plugins": [asdict(plugin) for plugin in plugins]})
+        self._send_json({"plugins": self._serialize_plugins(plugins)})
 
     def _handle_plugins_payload(self, payload: dict[str, object]) -> None:
         # L'UI envoie les scans locaux et FTP au meme endpoint pour garder
@@ -761,7 +851,7 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, status=400)
             return
 
-        self._send_json({"plugins": [asdict(plugin) for plugin in plugins]})
+        self._send_json({"plugins": self._serialize_plugins(plugins, payload)})
 
     def _handle_ftp_plugins(self, payload: dict[str, object]) -> None:
         host = str(payload.get("host", "")).strip()
@@ -802,7 +892,7 @@ class WpurRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     ftp.close()
 
-        self._send_json({"plugins": [asdict(plugin) for plugin in plugins]})
+        self._send_json({"plugins": self._serialize_plugins(plugins, payload)})
 
     def _read_json_body(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0") or "0")

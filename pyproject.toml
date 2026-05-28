@@ -1,0 +1,14 @@
+[project]
+name = "wpur"
+version = "0.2.0"
+description = "Outil de preparation de rapports de maintenance WordPress."
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

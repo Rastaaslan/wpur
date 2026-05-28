@@ -42,6 +42,8 @@ En tant qu'utilisateur, je souhaite avoir une interface simple sur laquelle est 
 
 **Objectif :** ajouter la version disponible a installer.
 
+**Etat :** implemente dans le repo courant. Detail : voir [livrable-2.md](livrable-2.md).
+
 ### User story
 
 En tant qu'utilisateur, je souhaite pouvoir voir la version actuellement installee et la version a installer pour chaque plugin.

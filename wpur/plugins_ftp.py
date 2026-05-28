@@ -8,9 +8,9 @@ import os
 import posixpath
 import re
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from ftplib import FTP, error_perm
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 
 PLUGIN_HEADER_KEYS = {
@@ -163,18 +163,56 @@ def connect(host: str, user: str, password: str, port: int, timeout: int) -> FTP
     return ftp
 
 
-def render_table(plugins: Iterable[PluginInfo]) -> str:
-    rows = [["Slug", "Nom", "Version", "Fichier", "Statut"]]
-    for plugin in plugins:
-        rows.append(
+def plugin_to_dict(plugin: Any) -> dict[str, Any]:
+    if is_dataclass(plugin):
+        return asdict(plugin)
+    if isinstance(plugin, Mapping):
+        return dict(plugin)
+    return {
+        name: getattr(plugin, name)
+        for name in dir(plugin)
+        if not name.startswith("_") and not callable(getattr(plugin, name))
+    }
+
+
+def _has_latest_data(plugins: list[dict[str, Any]]) -> bool:
+    return any(
+        plugin.get("latest_version") is not None
+        or plugin.get("update_status") is not None
+        or plugin.get("remote_status") is not None
+        for plugin in plugins
+    )
+
+
+def render_table(plugins: Iterable[Any]) -> str:
+    plugin_rows = [plugin_to_dict(plugin) for plugin in plugins]
+    with_latest = _has_latest_data(plugin_rows)
+    rows = [["Slug", "Nom", "Installee"]]
+    if with_latest:
+        rows[0].extend(["Disponible", "MAJ", "Public"])
+    rows[0].extend(["Fichier", "Statut lecture"])
+
+    for data in plugin_rows:
+        row = [
+            str(data.get("slug") or "-"),
+            str(data.get("name") or "-"),
+            str(data.get("installed_version") or data.get("version") or "-"),
+        ]
+        if with_latest:
+            row.extend(
+                [
+                    str(data.get("latest_version") or "-"),
+                    str(data.get("update_status") or "unknown"),
+                    str(data.get("remote_status") or "-"),
+                ]
+            )
+        row.extend(
             [
-                plugin.slug,
-                plugin.name or "-",
-                plugin.version or "-",
-                plugin.main_file or "-",
-                plugin.status,
+                str(data.get("main_file") or "-"),
+                str(data.get("read_status") or data.get("status") or "-"),
             ]
         )
+        rows.append(row)
 
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     lines = []
@@ -185,12 +223,31 @@ def render_table(plugins: Iterable[PluginInfo]) -> str:
     return "\n".join(lines)
 
 
-def render_csv(plugins: Iterable[PluginInfo]) -> str:
+def render_csv(plugins: Iterable[Any]) -> str:
+    plugin_rows = [plugin_to_dict(plugin) for plugin in plugins]
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["slug", "name", "version", "main_file", "status"])
+    fieldnames = ["slug", "name", "version", "main_file", "status"]
+    if _has_latest_data(plugin_rows):
+        fieldnames = [
+            "slug",
+            "name",
+            "installed_version",
+            "latest_version",
+            "update_status",
+            "remote_status",
+            "version_checked_at",
+            "version_source",
+            "version_error",
+            "main_file",
+            "status",
+            "read_status",
+        ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
-    for plugin in plugins:
-        writer.writerow(asdict(plugin))
+    for plugin in plugin_rows:
+        row = dict(plugin)
+        row.setdefault("installed_version", row.get("version"))
+        writer.writerow(row)
     return output.getvalue()
 
 
@@ -203,6 +260,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-path", default=os.getenv("WPUR_FTP_BASE_PATH", "/"), help="Chemin racine WordPress")
     parser.add_argument("--timeout", type=int, default=30, help="Delai de connexion en secondes")
     parser.add_argument("--format", choices=["table", "json", "csv"], default="table", help="Format de sortie")
+    parser.add_argument("--with-latest", action="store_true", help="Ajoute la derniere version publique WordPress.org")
+    parser.add_argument("--refresh-latest", action="store_true", help="Ignore le cache des versions publiques")
+    parser.add_argument("--version-cache", default=None, help="Chemin du cache JSON des versions publiques")
+    parser.add_argument("--version-timeout", type=int, default=10, help="Delai API WordPress.org en secondes")
+    parser.add_argument("--version-workers", type=int, default=8, help="Nombre de recherches de versions en parallele")
     return parser
 
 
@@ -224,8 +286,19 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         ftp.quit()
 
+    if args.with_latest:
+        from wpur.versions import WordPressPluginVersionClient, enrich_plugins_with_latest
+
+        client = WordPressPluginVersionClient(cache_path=args.version_cache, timeout=args.version_timeout)
+        plugins = enrich_plugins_with_latest(
+            plugins,
+            lookup=client,
+            refresh=args.refresh_latest,
+            max_workers=args.version_workers,
+        )
+
     if args.format == "json":
-        print(json.dumps([asdict(plugin) for plugin in plugins], indent=2, ensure_ascii=False))
+        print(json.dumps([plugin_to_dict(plugin) for plugin in plugins], indent=2, ensure_ascii=False))
     elif args.format == "csv":
         print(render_csv(plugins), end="")
     else:
